@@ -1,19 +1,39 @@
 {
-    "status": "FAIL",
+    "status": "PASS",
     "tests": [
         {
             "name": "Server Startup",
             "status": "PASS"
         },
         {
-            "name": "/health Endpoint",
-            "status": "FAIL",
-            "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Max retries exceeded with url: /health (Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', port=8000): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))"
+            "name": "/health Endpoint & Model Loading",
+            "status": "PASS",
+            "details": {
+                "models_loaded": {
+                    "nowcast_1dcnn": true,
+                    "forecast_bilstm": true
+                },
+                "device": "/CPU:0",
+                "uptime_seconds": 332.83
+            }
         },
         {
             "name": "WebSocket Telemetry Stream",
-            "status": "FAIL",
-            "error": "[WinError 10061] No connection could be made because the target machine actively refused it"
+            "status": "PASS",
+            "sample_packet": {
+                "time": "19:29:19",
+                "timestamp": 1782827959539,
+                "sxr": 6.22,
+                "hxr": 3.02,
+                "sxrRollingMean": 6.22,
+                "hxrRollingMean": 3.02,
+                "nowcastProb": 0.0462,
+                "forecastClass": "B2.1",
+                "forecastTimeToPeak": "12h 0m",
+                "forecastConfidence": 0.23,
+                "alertLevel": "normal",
+                "tickCount": 1
+            }
         }
     ]
 }

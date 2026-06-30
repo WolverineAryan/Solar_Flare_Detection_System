@@ -5,6 +5,7 @@ import HeaderBar from "@/components/HeaderBar";
 import AlertBanner from "@/components/AlertBanner";
 import { useTelemetrySimulator } from "@/hooks/useTelemetrySimulator";
 import { Upload, FileDown, AlertCircle, CheckCircle2, Loader2, Play, Keyboard, PlusCircle } from "lucide-react";
+import { useTheme } from "@/context/ThemeContext";
 
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid } from "recharts";
 
@@ -39,6 +40,14 @@ import { useTelemetry } from "@/context/TelemetryContext";
 
 export default function DataExporter() {
   const { isRunning, isBackendConnected, alertLevel } = useTelemetrySimulator();
+  const { theme } = useTheme();
+
+  // Theme-aware chart colors
+  const gridColor     = theme === "light" ? "#e2e8f0" : "#1f2937";
+  const tooltipBg     = theme === "light" ? "#ffffff" : "#0d1117";
+  const tooltipBorder = theme === "light" ? "#e2e8f0" : "#1f2937";
+  const axisColor     = theme === "light" ? "#94a3b8" : "#6b7280";
+  const tooltipStyle  = { backgroundColor: tooltipBg, borderColor: tooltipBorder, fontSize: 10, borderRadius: 6 };
   
   const {
     points,
@@ -439,13 +448,13 @@ export default function DataExporter() {
                       <div className="flex-1 min-h-0">
                         <ResponsiveContainer width="100%" height="100%">
                           <LineChart data={previewData}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
-                            <XAxis dataKey="time" stroke="var(--text-muted)" fontSize={9} />
-                            <YAxis stroke="var(--text-muted)" fontSize={9} />
-                            <Tooltip contentStyle={{ backgroundColor: "var(--chart-tooltip-bg)", borderColor: "var(--chart-tooltip-border)" }} />
+                            <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                            <XAxis dataKey="time" stroke={axisColor} fontSize={9} />
+                            <YAxis stroke={axisColor} fontSize={9} />
+                            <Tooltip contentStyle={tooltipStyle} formatter={(val) => [typeof val === "number" ? val.toFixed(2) : val]} />
                             <Legend wrapperStyle={{ fontSize: 9 }} />
-                            <Line type="monotone" dataKey="sxr" stroke="var(--solexs-orange)" name="SoLEXS SXR" strokeWidth={2} dot={false} />
-                            <Line type="monotone" dataKey="hxr" stroke="var(--helios-cyan)" name="HEL1OS HXR" strokeWidth={1.5} dot={false} />
+                            <Line type="monotone" dataKey="sxr" stroke="#f97316" name="SoLEXS SXR" strokeWidth={2} dot={false} isAnimationActive={false} />
+                            <Line type="monotone" dataKey="hxr" stroke="#0ea5e9" name="HEL1OS HXR" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                           </LineChart>
                         </ResponsiveContainer>
                       </div>
@@ -459,12 +468,12 @@ export default function DataExporter() {
                       <div className="flex-1 min-h-0">
                         <ResponsiveContainer width="100%" height="100%">
                           <LineChart data={previewData}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
-                            <XAxis dataKey="time" stroke="var(--text-muted)" fontSize={9} />
-                            <YAxis domain={[0, 1]} stroke="var(--text-muted)" fontSize={9} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
-                            <Tooltip contentStyle={{ backgroundColor: "var(--chart-tooltip-bg)", borderColor: "var(--chart-tooltip-border)" }} />
+                            <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                            <XAxis dataKey="time" stroke={axisColor} fontSize={9} />
+                            <YAxis domain={[0, 1]} stroke={axisColor} fontSize={9} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
+                            <Tooltip contentStyle={tooltipStyle} formatter={(val) => [typeof val === "number" ? `${(val*100).toFixed(1)}%` : val, "Nowcast"]} />
                             <Legend wrapperStyle={{ fontSize: 9 }} />
-                            <Line type="monotone" dataKey="nowcast_prob" stroke="#ef4444" name="Nowcast Probability" strokeWidth={2} dot={false} />
+                            <Line type="monotone" dataKey="nowcast_prob" stroke="#ef4444" name="Nowcast Probability" strokeWidth={2} dot={false} isAnimationActive={false} />
                           </LineChart>
                         </ResponsiveContainer>
                       </div>
