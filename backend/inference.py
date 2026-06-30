@@ -1,153 +1,76 @@
 """
-Inference pipeline for the Solar Flare Early Warning System.
-
-Loads the three PyTorch models (autoencoder, CNN nowcaster, BiLSTM
-forecaster) from disk and exposes a clean Python API for running
-inference.  When model weights are missing, each method transparently
-falls back to a heuristic / simulated prediction so the dashboard
-remains fully functional during development and training.
-
-Usage
------
->>> pipeline = InferencePipeline("d:/Project/Solar_Flare_system/ml/saved_models")
->>> prob, critical = pipeline.nowcast(hxr_features)
+Inference pipeline for the Solar Flare Early Warning System (TensorFlow/Keras version).
+Loads the 1D-CNN Nowcaster and BiLSTM Forecaster models from disk and exposes
+a clean API for running inference. Uses optimal thresholds from config.
 """
 
 from __future__ import annotations
-
 import logging
+import os
 import sys
+import json
 from pathlib import Path
 from typing import Any
-
 import numpy as np
-import torch
-import torch.nn.functional as F
+import tensorflow as tf
 
-# ---------------------------------------------------------------------------
-# Allow imports from the top-level project so we can reach ml.models.*
-# ---------------------------------------------------------------------------
+# Allow imports from the top-level project
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from ml.models.autoencoder import DenoisingAutoencoder        # noqa: E402
-from ml.models.cnn_nowcaster import CNNNowcaster               # noqa: E402
-from ml.models.bilstm_forecaster import BiLSTMForecaster       # noqa: E402
+from backend.ml.models import BinaryFocalLoss
 
 logger = logging.getLogger("solarflare.inference")
 
-# Alert threshold for nowcast probability
-_NOWCAST_ALERT_THRESHOLD: float = 0.65
-
-# Flare-class labels (same order as BiLSTMForecaster output)
 _FLARE_CLASSES: list[str] = ["B", "C", "M", "X"]
 
-
 class InferencePipeline:
-    """Unified inference pipeline wrapping all three ML models.
-
-    Parameters
-    ----------
-    models_dir : str | Path
-        Directory that contains the saved ``.pth`` weight files.
-        Expected filenames:
-        - ``autoencoder.pth``
-        - ``cnn_nowcaster.pth``
-        - ``bilstm_forecaster.pth``
-    """
-
-    # Mapping: friendly name → (filename, model class, constructor kwargs)
-    _MODEL_REGISTRY: dict[str, tuple[str, type, dict[str, Any]]] = {
-        "autoencoder": (
-            "autoencoder.pth",
-            DenoisingAutoencoder,
-            {"window_length": 256, "in_channels": 1},
-        ),
-        "cnn_nowcaster": (
-            "cnn_nowcaster.pth",
-            CNNNowcaster,
-            {"in_channels": 4, "window_length": 128},
-        ),
-        "bilstm_forecaster": (
-            "bilstm_forecaster.pth",
-            BiLSTMForecaster,
-            {"in_channels": 3, "hidden_dim": 128, "num_classes": 4},
-        ),
-    }
+    """Unified inference pipeline wrapping all trained Keras models."""
 
     def __init__(self, models_dir: str | Path) -> None:
         self.models_dir = Path(models_dir)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = "/GPU:0" if tf.config.list_physical_devices('GPU') else "/CPU:0"
         logger.info("Inference device: %s", self.device)
 
-        # Holds loaded model instances (or None when weights are absent)
-        self._models: dict[str, torch.nn.Module | None] = {}
+        # Load optimized thresholds
+        self.thresholds = {"nowcast_threshold": 0.52, "forecast_threshold": 0.49}
+        threshold_path = self.models_dir / "thresholds.json"
+        if threshold_path.exists():
+            try:
+                with open(threshold_path, "r") as f:
+                    self.thresholds = json.load(f)
+                logger.info("Loaded optimized thresholds: %s", self.thresholds)
+            except Exception as e:
+                logger.error("Failed to load thresholds.json: %s", e)
 
-        for name, (filename, cls, kwargs) in self._MODEL_REGISTRY.items():
-            self._models[name] = self._try_load(name, filename, cls, kwargs)
+        # Load Keras models
+        self._models: dict[str, tf.keras.Model | None] = {}
+        self._models["nowcast_1dcnn"] = self._try_load("nowcast_1dcnn.h5")
+        self._models["forecast_bilstm"] = self._try_load("forecast_bilstm.h5")
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _try_load(
-        self,
-        name: str,
-        filename: str,
-        cls: type,
-        kwargs: dict[str, Any],
-    ) -> torch.nn.Module | None:
-        """Attempt to instantiate a model and load its weights.
-
-        Returns ``None`` (instead of crashing) when the file is missing
-        or incompatible, enabling graceful fallback.
-        """
-        weight_path = self.models_dir / filename
-        if not weight_path.exists():
-            logger.warning(
-                "Weights not found for '%s' at %s — using simulated fallback.",
-                name,
-                weight_path,
-            )
+    def _try_load(self, filename: str) -> tf.keras.Model | None:
+        """Load a Keras model from the saved models directory."""
+        model_path = self.models_dir / filename
+        if not model_path.exists():
+            logger.warning("Model file not found: %s — using fallback simulation.", model_path)
             return None
-
         try:
-            model = cls(**kwargs)
-            state_dict = torch.load(
-                weight_path, map_location=self.device, weights_only=True,
-            )
-            model.load_state_dict(state_dict)
-            model.to(self.device).eval()
-            logger.info("Loaded '%s' from %s", name, weight_path)
+            custom_objects = {"BinaryFocalLoss": BinaryFocalLoss}
+            model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+            logger.info("Loaded model successfully from %s", model_path)
             return model
         except Exception as exc:
-            logger.error(
-                "Failed to load '%s' from %s: %s — using simulated fallback.",
-                name,
-                weight_path,
-                exc,
-            )
+            logger.error("Failed to load model from %s: %s", model_path, exc)
             return None
-
-    @staticmethod
-    def _to_tensor(
-        data: list | np.ndarray,
-        dtype: torch.dtype = torch.float32,
-    ) -> torch.Tensor:
-        """Convert list / ndarray → torch.Tensor."""
-        if isinstance(data, list):
-            data = np.array(data, dtype=np.float32)
-        return torch.tensor(data, dtype=dtype)
-
-    # ------------------------------------------------------------------
-    # Public properties
-    # ------------------------------------------------------------------
 
     @property
     def models_loaded(self) -> dict[str, bool]:
-        """Return a mapping of model name → ``True`` if weights were loaded."""
-        return {name: (m is not None) for name, m in self._models.items()}
+        """Return status mapping of loaded models."""
+        return {
+            "nowcast_1dcnn": self._models.get("nowcast_1dcnn") is not None,
+            "forecast_bilstm": self._models.get("forecast_bilstm") is not None,
+        }
 
     # ------------------------------------------------------------------
     # 1. Denoising / Cleaning
@@ -156,58 +79,16 @@ class InferencePipeline:
     def clean(
         self,
         raw_window: list[float],
-        instrument: str = "helios",
+        instrument: str = "solexs",
     ) -> tuple[list[float], list[float]]:
-        """Clean a raw telemetry window using the denoising autoencoder.
-
-        Parameters
-        ----------
-        raw_window : list[float]
-            1-D raw signal (arbitrary length; will be zero-padded / truncated
-            to the model's ``window_length`` internally).
-        instrument : str
-            ``'helios'`` or ``'solexs'`` — reserved for future per-instrument
-            scaling but currently handled identically.
-
-        Returns
-        -------
-        cleaned : list[float]
-            Denoised signal (same length as input).
-        anomaly_scores : list[float]
-            Per-window reconstruction error (single value wrapped in a list
-            when the model is available; per-point absolute residual otherwise).
-        """
-        model = self._models.get("autoencoder")
-        original_len = len(raw_window)
-
-        if model is not None:
-            # Prepare tensor: (1, 1, window_length)
-            window_length = model.window_length  # type: ignore[attr-defined]
-            arr = np.array(raw_window, dtype=np.float32)
-
-            # Pad or truncate to match expected window
-            if len(arr) < window_length:
-                arr = np.pad(arr, (0, window_length - len(arr)), mode="edge")
-            elif len(arr) > window_length:
-                arr = arr[:window_length]
-
-            x = torch.tensor(arr, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-            x = x.to(self.device)
-
-            with torch.no_grad():
-                x_hat = model(x)
-                mse = ((x - x_hat) ** 2).mean(dim=(1, 2)).cpu().numpy()
-
-            cleaned = x_hat.squeeze().cpu().numpy()[:original_len].tolist()
-            anomaly_scores = [round(float(mse[0]), 6)]
-            return cleaned, anomaly_scores
-
-        # ------ Fallback: return input with a simple smoothing ------
+        """Clean a raw telemetry window using a simple moving-average fallback."""
         arr = np.array(raw_window, dtype=np.float32)
-        # Simple moving-average denoise (window=5)
         kernel_size = min(5, len(arr))
-        kernel = np.ones(kernel_size) / kernel_size
-        smoothed = np.convolve(arr, kernel, mode="same")
+        if kernel_size > 0:
+            kernel = np.ones(kernel_size) / kernel_size
+            smoothed = np.convolve(arr, kernel, mode="same")
+        else:
+            smoothed = arr
         residuals = np.abs(arr - smoothed)
         return smoothed.tolist(), residuals.tolist()
 
@@ -219,38 +100,37 @@ class InferencePipeline:
         self,
         hxr_features: list[list[float]] | np.ndarray,
     ) -> tuple[float, bool, float]:
-        """Predict the imminent-flare probability from HXR features.
+        """Predict the imminent-flare probability from SXR Nowcaster features.
 
         Parameters
         ----------
-        hxr_features : array-like, shape ``[128, 4]``
+        hxr_features : array-like, shape ``[60, 4]``
             Four-channel feature matrix: counts_clean, rolling_mean,
-            rolling_std, derivative.
-
-        Returns
-        -------
-        probability : float
-            Flare probability ∈ [0, 1].
-        is_critical : bool
-            ``True`` when probability ≥ alert threshold.
-        confidence : float
-            Model confidence ∈ [0, 1].
+            rolling_std, zscore.
         """
-        model = self._models.get("cnn_nowcaster")
+        model = self._models.get("nowcast_1dcnn")
+        th_n = self.thresholds.get("nowcast_threshold", 0.52)
 
         if model is not None:
-            # CNN expects (batch, channels, time) → transpose from (T, C)
-            arr = self._to_tensor(hxr_features)        # (128, 4)
-            x = arr.T.unsqueeze(0).to(self.device)     # (1, 4, 128)
-
-            with torch.no_grad():
-                prob_t = model(x)                      # (1, 1)
-
-            prob = float(prob_t.squeeze().cpu())
+            # Keras expects (batch, sequence, channels) -> shape (1, 60, 4)
+            arr = np.array(hxr_features, dtype=np.float32)
+            if arr.shape != (60, 4):
+                # Align shape if mismatch occurs
+                if arr.shape[0] > 60:
+                    arr = arr[-60:]
+                else:
+                    arr = np.pad(arr, ((60 - arr.shape[0], 0), (0, 0)), mode="edge")
+            
+            x = np.expand_dims(arr, axis=0)
+            
+            with tf.device(self.device):
+                prob_t = model(x, training=False)
+                
+            prob = float(prob_t.numpy().squeeze())
             confidence = abs(prob - 0.5) * 2.0
             return (
                 round(prob, 4),
-                prob >= _NOWCAST_ALERT_THRESHOLD,
+                prob >= th_n,
                 round(confidence, 4),
             )
 
@@ -261,15 +141,12 @@ class InferencePipeline:
         std_val = float(np.std(counts)) + 1e-8
         max_val = float(np.max(counts))
 
-        # Simple z-score–based spike detection
         spike_score = (max_val - mean_val) / std_val
         prob = float(np.clip(1.0 / (1.0 + np.exp(-0.5 * (spike_score - 3.0))), 0, 1))
-        # Add small random jitter for realism
-        prob = float(np.clip(prob + np.random.normal(0, 0.02), 0, 1))
         confidence = abs(prob - 0.5) * 2.0
         return (
             round(prob, 4),
-            prob >= _NOWCAST_ALERT_THRESHOLD,
+            prob >= th_n,
             round(confidence, 4),
         )
 
@@ -281,42 +158,51 @@ class InferencePipeline:
         self,
         sxr_features: list[list[float]] | np.ndarray,
     ) -> tuple[str, dict[str, float], float, float]:
-        """Forecast flare class and time-to-peak from SXR features.
+        """Forecast flare class and time-to-peak from SXR + Nowcaster features.
 
         Parameters
         ----------
-        sxr_features : array-like, shape ``[512, 3]``
-            Three-channel feature matrix: counts_clean, rolling_mean,
-            rolling_std.
-
-        Returns
-        -------
-        predicted_class : str
-            GOES flare class ('B', 'C', 'M', or 'X').
-        class_probabilities : dict[str, float]
-            Softmax probabilities for each class.
-        time_to_peak_hours : float
-            Estimated hours until flux peak.
-        confidence : float
-            Confidence in the predicted class ∈ [0, 1].
+        sxr_features : array-like, shape ``[120, 5]``
+            Five-channel feature matrix: counts_clean, rolling_mean,
+            rolling_std, label_nowcast, nowcast_proba.
         """
-        model = self._models.get("bilstm_forecaster")
+        model = self._models.get("forecast_bilstm")
+        th_f = self.thresholds.get("forecast_threshold", 0.49)
 
         if model is not None:
-            arr = self._to_tensor(sxr_features)          # (512, 3)
-            x = arr.unsqueeze(0).to(self.device)          # (1, 512, 3)
-
-            with torch.no_grad():
-                logits, time_pred = model(x)
-                probs = F.softmax(logits, dim=-1).squeeze(0).cpu().numpy()
-                time_hours = float(time_pred.squeeze().cpu())
-
-            cls_idx = int(np.argmax(probs))
-            predicted_class = _FLARE_CLASSES[cls_idx]
-            class_probs = {
-                c: round(float(probs[i]), 4) for i, c in enumerate(_FLARE_CLASSES)
-            }
-            confidence = float(probs[cls_idx])
+            arr = np.array(sxr_features, dtype=np.float32)
+            if arr.shape != (120, 5):
+                if arr.shape[0] > 120:
+                    arr = arr[-120:]
+                else:
+                    arr = np.pad(arr, ((120 - arr.shape[0], 0), (0, 0)), mode="edge")
+            
+            x = np.expand_dims(arr, axis=0)
+            
+            with tf.device(self.device):
+                prob_t = model(x, training=False)
+                
+            prob = float(prob_t.numpy().squeeze())
+            confidence = abs(prob - 0.5) * 2.0
+            
+            # Map binary forecasting probability to GOES flare class
+            counts_clean = arr[-1, 0]
+            if prob < th_f:
+                predicted_class = "B"
+                class_probs = {"B": round(1.0 - prob, 4), "C": round(prob * 0.7, 4), "M": round(prob * 0.2, 4), "X": round(prob * 0.1, 4)}
+            else:
+                if counts_clean > 40.0:
+                    predicted_class = "X"
+                    class_probs = {"B": round(1.0 - prob, 4), "C": round((prob * 0.1), 4), "M": round((prob * 0.2), 4), "X": round((prob * 0.7), 4)}
+                elif counts_clean > 25.0:
+                    predicted_class = "M"
+                    class_probs = {"B": round(1.0 - prob, 4), "C": round((prob * 0.2), 4), "M": round((prob * 0.7), 4), "X": round((prob * 0.1), 4)}
+                else:
+                    predicted_class = "C"
+                    class_probs = {"B": round(1.0 - prob, 4), "C": round((prob * 0.7), 4), "M": round((prob * 0.2), 4), "X": round((prob * 0.1), 4)}
+            
+            # Lead time is 15 minutes (0.25 hours)
+            time_hours = max(0.05, 0.25 - (float(counts_clean) / 200.0))
             return predicted_class, class_probs, round(time_hours, 2), round(confidence, 4)
 
         # ------ Fallback: heuristic based on SXR mean level ------
@@ -324,30 +210,19 @@ class InferencePipeline:
         counts = arr[:, 0] if arr.ndim == 2 else arr
         mean_level = float(np.mean(np.abs(counts)))
 
-        # Map mean level to rough flare class via thresholds
         if mean_level < 1e-7:
-            base_probs = [0.70, 0.20, 0.08, 0.02]
+            predicted_class = "B"
+            class_probs = {"B": 0.85, "C": 0.10, "M": 0.04, "X": 0.01}
         elif mean_level < 1e-5:
-            base_probs = [0.30, 0.45, 0.18, 0.07]
+            predicted_class = "C"
+            class_probs = {"B": 0.20, "C": 0.60, "M": 0.15, "X": 0.05}
         elif mean_level < 1e-3:
-            base_probs = [0.05, 0.20, 0.50, 0.25]
+            predicted_class = "M"
+            class_probs = {"B": 0.05, "C": 0.15, "M": 0.65, "X": 0.15}
         else:
-            base_probs = [0.02, 0.08, 0.30, 0.60]
+            predicted_class = "X"
+            class_probs = {"B": 0.01, "C": 0.04, "M": 0.15, "X": 0.80}
 
-        # Add jitter
-        noise = np.random.dirichlet(np.array(base_probs) * 50 + 1).tolist()
-        probs_arr = np.array(noise, dtype=np.float32)
-        probs_arr /= probs_arr.sum()
-
-        cls_idx = int(np.argmax(probs_arr))
-        predicted_class = _FLARE_CLASSES[cls_idx]
-        class_probs = {
-            c: round(float(probs_arr[i]), 4)
-            for i, c in enumerate(_FLARE_CLASSES)
-        }
-        confidence = float(probs_arr[cls_idx])
-
-        # Simulated time-to-peak (inverse relationship with intensity)
-        time_hours = max(0.1, round(float(np.random.exponential(2.0 + 3.0 / (mean_level + 1))), 2))
-
+        confidence = float(class_probs[predicted_class])
+        time_hours = max(0.1, round(float(np.random.exponential(0.25)), 2))
         return predicted_class, class_probs, time_hours, round(confidence, 4)

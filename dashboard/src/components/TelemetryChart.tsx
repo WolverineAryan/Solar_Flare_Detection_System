@@ -192,6 +192,7 @@ export default function TelemetryChart({ data }: TelemetryChartProps) {
 
             {/* SXR Area + Line */}
             <Area
+              key="sxr-area"
               yAxisId="sxr"
               type="monotone"
               dataKey="sxr"
@@ -200,6 +201,7 @@ export default function TelemetryChart({ data }: TelemetryChartProps) {
               isAnimationActive={false}
             />
             <Line
+              key="sxr-line"
               yAxisId="sxr"
               type="monotone"
               dataKey="sxr"
@@ -212,6 +214,7 @@ export default function TelemetryChart({ data }: TelemetryChartProps) {
 
             {/* HXR Line */}
             <Line
+              key="hxr-line"
               yAxisId="hxr"
               type="linear"
               dataKey="hxr"

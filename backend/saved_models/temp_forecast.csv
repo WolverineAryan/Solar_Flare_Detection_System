@@ -1,0 +1,2 @@
+counts_raw,counts_clean,rolling_mean,rolling_std,zscore,nowcast_probability,hxr,is_true_flare,label_nowcast,nowcast_proba,label_forecast,forecast_proba,datetime_utc
+10.633333333333333,13.407142853250308,8.531739815172251,4.891907073785134,0.9489412396081773,0.2082333333333333,19.32142905191499,1,0,0.0,0,0.0,2026-06-30 06:55:00

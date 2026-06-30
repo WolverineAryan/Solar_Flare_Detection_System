@@ -145,15 +145,15 @@ class ForecastRequest(BaseModel):
     Attributes
     ----------
     sxr_window : list[list[float]]
-        2-D feature array of shape ``[512, 3]``.
-        Channels: ``[counts_clean, rolling_mean, rolling_std]``.
+        2-D feature array of shape ``[512, 4]``.
+        Channels: ``[counts_clean, rolling_mean, rolling_std, nowcast_prob]``.
     """
 
     sxr_window: list[list[float]] = Field(
         ...,
         description=(
-            "SXR feature window, shape [512, 3] — "
-            "columns: counts_clean, rolling_mean, rolling_std"
+            "SXR feature window, shape [512, 4] — "
+            "columns: counts_clean, rolling_mean, rolling_std, nowcast_prob"
         ),
     )
 

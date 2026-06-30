@@ -1,0 +1,19 @@
+{
+    "status": "FAIL",
+    "tests": [
+        {
+            "name": "Server Startup",
+            "status": "PASS"
+        },
+        {
+            "name": "/health Endpoint",
+            "status": "FAIL",
+            "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Max retries exceeded with url: /health (Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', port=8000): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))"
+        },
+        {
+            "name": "WebSocket Telemetry Stream",
+            "status": "FAIL",
+            "error": "[WinError 10061] No connection could be made because the target machine actively refused it"
+        }
+    ]
+}

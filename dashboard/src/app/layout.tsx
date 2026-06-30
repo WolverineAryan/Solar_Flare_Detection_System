@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Inter, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { TelemetryProvider } from "../context/TelemetryContext";
+import { ThemeProvider } from "../context/ThemeContext";
+import AlertNotifications from "@/components/AlertNotifications";
 
 const inter = Inter({
   variable: "--font-geist-sans",
@@ -27,12 +30,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${inter.variable} ${geistMono.variable} dark`}
-    >
+    <html lang="en" className={`${inter.variable} ${geistMono.variable}`}>
       <body className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)] antialiased">
-        {children}
+        <ThemeProvider>
+          <TelemetryProvider>
+            {children}
+            <AlertNotifications />
+          </TelemetryProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
