@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 import numpy as np
 import tensorflow as tf
+from backend.ml.models import build_nowcast_model, build_forecast_model
 
 # Allow imports from the top-level project
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -50,18 +51,22 @@ class InferencePipeline:
         self._models["forecast_bilstm"] = self._try_load("forecast_bilstm.h5")
 
     def _try_load(self, filename: str) -> tf.keras.Model | None:
-        """Load a Keras model from the saved models directory."""
-        model_path = self.models_dir / filename
-        if not model_path.exists():
-            logger.warning("Model file not found: %s — using fallback simulation.", model_path)
+        """Build model architecture and load weights-only (avoids broken Keras 3 .h5 deserialization)."""
+        weights_filename = filename.replace(".h5", ".weights.h5")
+        weights_path = self.models_dir / weights_filename
+        if not weights_path.exists():
+            logger.warning("Weights file not found: %s — using fallback simulation.", weights_path)
             return None
         try:
-            custom_objects = {"BinaryFocalLoss": BinaryFocalLoss}
-            model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
-            logger.info("Loaded model successfully from %s", model_path)
+            if "nowcast" in filename:
+                model = build_nowcast_model(window_length=60, in_channels=4)
+            else:
+                model = build_forecast_model(window_length=120, in_channels=5)
+            model.load_weights(str(weights_path))
+            logger.info("Loaded weights successfully from %s", weights_path)
             return model
         except Exception as exc:
-            logger.error("Failed to load model from %s: %s", model_path, exc)
+            logger.error("Failed to load weights from %s: %s", weights_path, exc)
             return None
 
     @property
